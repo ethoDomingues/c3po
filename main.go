@@ -2,6 +2,7 @@ package c3po
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -182,20 +183,21 @@ type Fielder struct {
 	isPointer bool         `json:"-"`
 }
 
-func (f *Fielder) MountSchema(data map[string]any) (reflect.Value, error) {
+func (f *Fielder) MountSchema(data map[string]any) (reflect.Value, map[string]any) {
+	errs := map[string]any{}
 	schT := reflect.TypeOf(f.Schema)
 	if schT.Kind() == reflect.Pointer {
 		schT = schT.Elem()
 	}
 	sch := reflect.New(schT).Elem()
-	var err error
+	var err map[string]any
 	for fieldName, fielder := range f.Children {
 		if v, ok := data[fieldName]; ok {
 			var schVal reflect.Value
 			if dataFielder, ok := v.(map[string]any); ok {
 				schVal, err = fielder.MountSchema(dataFielder)
 				if err != nil {
-					fmt.Println("missing -> ", fieldName)
+					errs[fieldName] = err
 				}
 			} else {
 				schVal = reflect.ValueOf(v)
@@ -208,7 +210,7 @@ func (f *Fielder) MountSchema(data map[string]any) (reflect.Value, error) {
 							sf := fielder.Children["[]"]
 							slicSch, err := sf.MountSchema(s.Interface().(map[string]any))
 							if err != nil {
-								fmt.Println("missing -> ", fieldName)
+								errs[fieldName] = err
 							}
 							sItem := slice.Index(i)
 							sItem.Set(slicSch)
@@ -219,24 +221,28 @@ func (f *Fielder) MountSchema(data map[string]any) (reflect.Value, error) {
 			}
 			rf := sch.FieldByName(fielder.realName)
 			if !setReflectValue(rf, schVal) {
-				fmt.Println("invalid type -> ", fielder.realName)
+				errs[fieldName] = ErrorInvalidType
 			}
 		} else if fielder.Required {
-			fmt.Println("missing -> ", fieldName)
+			errs[fieldName] = ErrorIsMissing
 		}
 	}
-	return sch, nil
+	if len(errs) == 0 {
+		return sch, nil
+	}
+	if f.isPointer {
+		return sch.Addr(), errs
+	}
+	return sch, errs
 }
 
 func (f *Fielder) Mount(data map[string]any) (any, error) {
 	sch, err := f.MountSchema(data)
 	if err != nil {
-		return nil, err
+		e, _ := json.MarshalIndent(err, "", "    ")
+		return nil, errors.New(string(e))
 	}
-	if f.isPointer {
-		return sch.Addr().Interface(), nil
-	}
-	return sch.Interface(), nil
+	return sch, nil
 }
 
 func (f *Fielder) String() string {
