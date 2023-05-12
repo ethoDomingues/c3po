@@ -71,7 +71,7 @@ func parseTags(tag string) map[string]string {
 }
 
 func parseSchema(name, tagKey string, schema any) *Fielder {
-	schemaFields := &Fielder{}
+	schemaField := &Fielder{}
 
 	var rt reflect.Type
 	var rv reflect.Value
@@ -80,6 +80,7 @@ func parseSchema(name, tagKey string, schema any) *Fielder {
 	rt = reflect.TypeOf(schema)
 
 	if rv.Kind() == reflect.Pointer {
+		schemaField.isPointer = true
 		rTmp := rv.Elem()
 		if rTmp.IsValid() {
 			rv = rTmp
@@ -87,10 +88,10 @@ func parseSchema(name, tagKey string, schema any) *Fielder {
 		}
 	}
 
-	schemaFields.Name = name
-	schemaFields.Type = rt.Kind()
-	schemaFields.Schema = schema
-	schemaFields.Children = map[string]*Fielder{}
+	schemaField.Name = name
+	schemaField.Type = rt.Kind()
+	schemaField.Schema = schema
+	schemaField.Children = map[string]*Fielder{}
 
 	switch rt.Kind() {
 	case reflect.Struct:
@@ -119,27 +120,26 @@ func parseSchema(name, tagKey string, schema any) *Fielder {
 				name = strings.ToLower(string(ft.Name[0])) + ft.Name[1:]
 			}
 			if rec {
-				schemaFields.Children[name] = parseSchema(name, tagKey, fv.Interface())
+				schemaField.Children[name] = parseSchema(name, tagKey, fv.Interface())
 			} else {
-				schemaFields.Children[name] = &Fielder{
+				schemaField.Children[name] = &Fielder{
 					Type:   fv.Kind(),
 					Schema: fv.Interface(),
 				}
 			}
-			schemaFields.Children[name].Name = name
-			schemaFields.Children[name].realName = ft.Name
-			schemaFields.Children[name].Required = req
-			schemaFields.Children[name].recursive = rec
+			schemaField.Children[name].Name = name
+			schemaField.Children[name].realName = ft.Name
+			schemaField.Children[name].Required = req
+			schemaField.Children[name].recursive = rec
 
 		}
 	case reflect.Slice:
 		sliceObjet := reflect.New(rv.Type().Elem()).Elem()
-		schemaFields.Type = reflect.Slice
-		schemaFields.SliceOf = sliceObjet.Type()
-		schemaFields.Children["[]"] = parseSchema("[]", tagKey, sliceObjet.Interface())
+		schemaField.Type = reflect.Slice
+		schemaField.SliceOf = sliceObjet.Type()
+		schemaField.Children["[]"] = parseSchema("[]", tagKey, sliceObjet.Interface())
 	}
-
-	return schemaFields
+	return schemaField
 }
 
 func setReflectValue(r reflect.Value, v reflect.Value) bool {
@@ -177,8 +177,9 @@ type Fielder struct {
 	Required  bool `json:"required,"`
 	recursive bool
 
-	SliceOf reflect.Type `json:"-"`
-	Schema  any          `json:"-"`
+	SliceOf   reflect.Type `json:"-"`
+	Schema    any          `json:"-"`
+	isPointer bool         `json:"-"`
 }
 
 func (f *Fielder) MountSchema(data map[string]any) (reflect.Value, error) {
@@ -225,6 +226,17 @@ func (f *Fielder) MountSchema(data map[string]any) (reflect.Value, error) {
 		}
 	}
 	return sch, nil
+}
+
+func (f *Fielder) Mount(data map[string]any) (any, error) {
+	sch, err := f.MountSchema(data)
+	if err != nil {
+		return nil, err
+	}
+	if f.isPointer {
+		return sch.Addr().Interface(), nil
+	}
+	return sch.Interface(), nil
 }
 
 func (f *Fielder) String() string {
