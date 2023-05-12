@@ -8,25 +8,47 @@ import (
 	"strings"
 )
 
-type Fielder struct {
-	Name     string `json:"name,omitempty"`
-	realName string
-	Type     reflect.Kind        `json:"type,omitempty"`
-	Children map[string]*Fielder `json:"children,omitempty"`
-
-	Required  bool `json:"required,"`
-	recursive bool
-
-	SliceOf reflect.Type `json:"-"`
-	Schema  any          `json:"-"`
+func convert(v reflect.Value, t reflect.Type, convt *bool) reflect.Value {
+	*convt = true // se acontecer algum erro de converção, try() return false
+	defer try(convt)
+	switch t.Kind() {
+	case reflect.Float32, reflect.Float64:
+		switch v.Kind() {
+		case reflect.String:
+			if i, err := strconv.ParseFloat(v.Interface().(string), 64); err == nil {
+				return reflect.ValueOf(i).Convert(t)
+			}
+		case reflect.Int, reflect.Int64:
+			return v.Convert(t)
+		}
+	case reflect.Int, reflect.Int64:
+		switch v.Kind() {
+		case reflect.String:
+			if val, err := strconv.ParseFloat(v.Interface().(string), 64); err == nil {
+				return reflect.ValueOf(val).Convert(t)
+			}
+		case reflect.Float32, reflect.Float64:
+			return v.Convert(t)
+		}
+	case reflect.Bool:
+		if v.Kind() == reflect.String {
+			// "true" == true | "false" == false. other thing == error
+			if v.Interface() == "true" {
+				return reflect.ValueOf(true)
+			} else if v.Interface() == "false" {
+				return reflect.ValueOf(false)
+			}
+		}
+	}
+	*convt = false // não converteu, então retorna false
+	return reflect.Value{}
 }
 
-func (f *Fielder) String() string {
-	s, err := json.MarshalIndent(f, "", "  ")
-	if err != nil {
-		return ""
+func try(convt *bool) {
+	if err := recover(); err != nil {
+		*convt = false
+		fmt.Println("batata -> ", err)
 	}
-	return string(s)
 }
 
 func parseTags(tag string) map[string]string {
@@ -48,7 +70,7 @@ func parseTags(tag string) map[string]string {
 	return kvTags
 }
 
-func ParseSchema(name, tagKey string, schema any) *Fielder {
+func parseSchema(name, tagKey string, schema any) *Fielder {
 	schemaFields := &Fielder{}
 
 	var rt reflect.Type
@@ -97,7 +119,7 @@ func ParseSchema(name, tagKey string, schema any) *Fielder {
 				name = strings.ToLower(string(ft.Name[0])) + ft.Name[1:]
 			}
 			if rec {
-				schemaFields.Children[name] = ParseSchema(name, tagKey, fv.Interface())
+				schemaFields.Children[name] = parseSchema(name, tagKey, fv.Interface())
 			} else {
 				schemaFields.Children[name] = &Fielder{
 					Type:   fv.Kind(),
@@ -114,7 +136,7 @@ func ParseSchema(name, tagKey string, schema any) *Fielder {
 		sliceObjet := reflect.New(rv.Type().Elem()).Elem()
 		schemaFields.Type = reflect.Slice
 		schemaFields.SliceOf = sliceObjet.Type()
-		schemaFields.Children["[]"] = ParseSchema("[]", tagKey, sliceObjet.Interface())
+		schemaFields.Children["[]"] = parseSchema("[]", tagKey, sliceObjet.Interface())
 	}
 
 	return schemaFields
@@ -138,47 +160,25 @@ func setReflectValue(r reflect.Value, v reflect.Value) bool {
 	return true
 }
 
-func convert(v reflect.Value, t reflect.Type, convt *bool) reflect.Value {
-	*convt = true // se acontecer algum erro de converção, try() return false
-	defer try(convt)
-	switch t.Kind() {
-	case reflect.Float32, reflect.Float64:
-		switch v.Kind() {
-		case reflect.String:
-			if i, err := strconv.ParseFloat(v.Interface().(string), 64); err == nil {
-				return reflect.ValueOf(i).Convert(t)
-			}
-		case reflect.Int, reflect.Int64:
-			return v.Convert(t)
-		}
-	case reflect.Int, reflect.Int64:
-		switch v.Kind() {
-		case reflect.String:
-			if val, err := strconv.ParseFloat(v.Interface().(string), 64); err == nil {
-				return reflect.ValueOf(val).Convert(t)
-			}
-		case reflect.Float32, reflect.Float64:
-			return v.Convert(t)
-		}
-	case reflect.Bool:
-		if v.Kind() == reflect.String {
-			// "true" == true | "false" == false. other thing == error
-			if v.Interface() == "true" {
-				return reflect.ValueOf(true)
-			} else if v.Interface() == "false" {
-				return reflect.ValueOf(false)
-			}
-		}
-	}
-	*convt = false // não converteu, então retorna false
-	return reflect.Value{}
+func ParseSchema(schema any) *Fielder {
+	return parseSchema("", "c3po", schema)
 }
 
-func try(convt *bool) {
-	if err := recover(); err != nil {
-		*convt = false
-		fmt.Println("batata -> ", err)
-	}
+func ParseSchemaWithTag(tag string, schema any) *Fielder {
+	return parseSchema("", tag, schema)
+}
+
+type Fielder struct {
+	Name     string `json:"name,omitempty"`
+	realName string
+	Type     reflect.Kind        `json:"type,omitempty"`
+	Children map[string]*Fielder `json:"children,omitempty"`
+
+	Required  bool `json:"required,"`
+	recursive bool
+
+	SliceOf reflect.Type `json:"-"`
+	Schema  any          `json:"-"`
 }
 
 func (f *Fielder) MountSchema(data map[string]any) (reflect.Value, error) {
@@ -225,4 +225,12 @@ func (f *Fielder) MountSchema(data map[string]any) (reflect.Value, error) {
 		}
 	}
 	return sch, nil
+}
+
+func (f *Fielder) String() string {
+	s, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(s)
 }
