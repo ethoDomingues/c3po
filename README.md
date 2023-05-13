@@ -37,19 +37,13 @@ func main() {
 
  u := &User{}
  userSchema := c3po.ParseSchema(u)
- u2, err := userSchema.Mount(userData)
- if err != nil {
-  fmt.Println(err)
- }
+ u2, _err_ := userSchema.Mount(userData)
  Print(u)
  Print(u2)
 
  s := &Studant{}
  studantSchema := c3po.ParseSchema(s)
- s2, err := studantSchema.Mount(studantData)
- if err != nil {
-  fmt.Println(err)
- }
+ s2, _ := studantSchema.Mount(studantData)
  Print(s)
  Print(s2)
 
@@ -61,7 +55,6 @@ func Print(v any) {
  } else {
   fmt.Println(string(b))
  }
- fmt.Println()
 }
 
 ```

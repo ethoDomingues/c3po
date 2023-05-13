@@ -3,7 +3,6 @@ package c3po
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -48,7 +47,6 @@ func convert(v reflect.Value, t reflect.Type, convt *bool) reflect.Value {
 func try(convt *bool) {
 	if err := recover(); err != nil {
 		*convt = false
-		fmt.Println("batata -> ", err)
 	}
 }
 
@@ -97,11 +95,9 @@ func parseSchema(name, tagKey string, schema any) *Fielder {
 	switch rt.Kind() {
 	case reflect.Struct:
 		for i := 0; i < rt.NumField(); i++ {
-			var (
-				name = ""
-				req  = false
-				rec  = true
-			)
+			var name = ""
+			var req = false
+			var rec = true
 
 			fv := rv.Field(i)
 			ft := rt.Field(i)
@@ -110,7 +106,6 @@ func parseSchema(name, tagKey string, schema any) *Fielder {
 			if v, ok := tags["required"]; ok && (v == "" || v == "true") {
 				req = true
 			}
-
 			if v, ok := tags["recursive"]; ok && (v == "false") {
 				rec = false
 			}
@@ -129,6 +124,7 @@ func parseSchema(name, tagKey string, schema any) *Fielder {
 				}
 			}
 			schemaField.Children[name].Name = name
+			schemaField.Children[name].Tags = tags
 			schemaField.Children[name].realName = ft.Name
 			schemaField.Children[name].Required = req
 			schemaField.Children[name].recursive = rec
@@ -146,17 +142,14 @@ func parseSchema(name, tagKey string, schema any) *Fielder {
 func setReflectValue(r reflect.Value, v reflect.Value) bool {
 	rKind := r.Kind()
 	ok := false
-
 	if rKind != v.Kind() {
 		v = convert(v, r.Type(), &ok)
 	} else {
 		ok = true
 	}
-
 	if !ok {
 		return false
 	}
-
 	r.Set(v)
 	return true
 }
@@ -173,6 +166,7 @@ type Fielder struct {
 	Name     string `json:"name,omitempty"`
 	realName string
 	Type     reflect.Kind        `json:"type,omitempty"`
+	Tags     map[string]string   `json:"-"`
 	Children map[string]*Fielder `json:"children,omitempty"`
 
 	Required  bool `json:"required,"`
@@ -184,6 +178,9 @@ type Fielder struct {
 }
 
 func (f *Fielder) MountSchema(data map[string]any) (reflect.Value, map[string]any) {
+	if data == nil {
+		return reflect.Value{}, map[string]any{}
+	}
 	errs := map[string]any{}
 	schT := reflect.TypeOf(f.Schema)
 	if schT.Kind() == reflect.Pointer {
@@ -219,6 +216,7 @@ func (f *Fielder) MountSchema(data map[string]any) (reflect.Value, map[string]an
 					}
 				}
 			}
+
 			rf := sch.FieldByName(fielder.realName)
 			if !setReflectValue(rf, schVal) {
 				errs[fieldName] = ErrorInvalidType
@@ -227,11 +225,11 @@ func (f *Fielder) MountSchema(data map[string]any) (reflect.Value, map[string]an
 			errs[fieldName] = ErrorIsMissing
 		}
 	}
+	if f.isPointer {
+		sch = sch.Addr()
+	}
 	if len(errs) == 0 {
 		return sch, nil
-	}
-	if f.isPointer {
-		return sch.Addr(), errs
 	}
 	return sch, errs
 }
