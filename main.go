@@ -240,7 +240,13 @@ func (f *Fielder) Mount(data map[string]any) (any, error) {
 		e, _ := json.MarshalIndent(err, "", "    ")
 		return nil, errors.New(string(e))
 	}
-	return sch, nil
+	if f.isPointer {
+		if sch.Kind() == reflect.Pointer {
+			return sch.Interface(), nil
+		}
+		return sch.Addr().Interface(), nil
+	}
+	return sch.Interface(), nil
 }
 
 func (f *Fielder) String() string {
