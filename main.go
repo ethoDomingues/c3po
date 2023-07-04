@@ -3,6 +3,7 @@ package c3po
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -38,6 +39,11 @@ func convert(v reflect.Value, t reflect.Type, convt *bool) reflect.Value {
 			} else if v.Interface() == "false" {
 				return reflect.ValueOf(false)
 			}
+		}
+	case reflect.String:
+		switch v.Kind() {
+		case reflect.Float32, reflect.Float64, reflect.Int32, reflect.Int64, reflect.Int, reflect.Bool:
+			return reflect.ValueOf(fmt.Sprint(v.Interface()))
 		}
 	}
 	*convt = false // não converteu, então retorna false
