@@ -86,3 +86,25 @@ $ go run .
 }
 
 ```
+
+### Struct Tags Allowed
+
+- ### strict
+
+  - for: Slices
+  - default: true
+
+- ### required
+
+  - for: All
+  - default: true
+
+- ### name
+
+  - for: All
+  - default: Struct field name
+
+- ### escape
+
+  - for: String
+  - default: false
