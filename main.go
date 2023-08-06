@@ -9,18 +9,6 @@ import (
 	"strings"
 )
 
-var htmlReplacer = strings.NewReplacer(
-	"&", "&amp;",
-	"<", "&lt;",
-	">", "&gt;",
-	// "&#34;" is shorter than "&quot;".
-	`"`, "&#34;",
-	// "&#39;" is shorter than "&apos;" and apos was not in HTML until HTML5.
-	"'", "&#39;",
-)
-
-func HtmlEscape(s string) string { return htmlReplacer.Replace(s) }
-
 func convert(v *reflect.Value, t reflect.Type, stringEscape bool) bool {
 	defer try()
 	if v.Kind() == t.Kind() {
@@ -79,11 +67,6 @@ func convert(v *reflect.Value, t reflect.Type, stringEscape bool) bool {
 	return true
 }
 
-func try() bool {
-	err := recover()
-	return err != nil
-}
-
 func parseTags(tag string) map[string]string {
 	kvTags := map[string]string{}
 
@@ -116,6 +99,7 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 	}
 
 	f.Type = rt.Kind()
+	f.Tags = tags
 	f.Schema = schema
 	f.Children = map[string]*Fielder{}
 
@@ -124,7 +108,7 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 	}
 
 	v, ok := tags["escape"]
-	f.escape = (ok && (v == "" || v == "true"))
+	f.Escape = (ok && (v == "" || v == "true"))
 
 	f.RealName = tags["realName"]
 
@@ -153,21 +137,26 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 
 	switch rt.Kind() {
 	case reflect.Struct:
-		f.FieldsByIndex = []string{}
+		f.FieldsByIndex = map[int]string{}
 		for i := 0; i < rt.NumField(); i++ {
 			fv := rv.Field(i)
-			ft := rt.Field(i)
-			childTags := parseTags(ft.Tag.Get(tagKey))
-			childTags["realName"] = strings.ToLower(ft.Name)
-			if v, ok := childTags["name"]; ok && v != "" {
-				childTags["name"] = v
-			} else {
-				childTags["name"] = strings.ToLower(ft.Name)
-			}
-			child := parseSchema(fv.Interface(), tagKey, childTags)
-			f.FieldsByIndex = append(f.FieldsByIndex, ft.Name)
-			if child != nil {
-				f.Children[ft.Name] = child
+			if fv.CanInterface() {
+				ft := rt.Field(i)
+				childTags := parseTags(ft.Tag.Get(tagKey))
+				if _, ok := childTags["-"]; ok {
+					continue
+				}
+				childTags["realName"] = strings.ToLower(ft.Name)
+				if v, ok := childTags["name"]; ok && v != "" {
+					childTags["name"] = v
+				} else {
+					childTags["name"] = strings.ToLower(ft.Name)
+				}
+				child := parseSchema(fv.Interface(), tagKey, childTags)
+				f.FieldsByIndex[i] = ft.Name
+				if child != nil {
+					f.Children[ft.Name] = child
+				}
 			}
 		}
 	case reflect.Slice, reflect.Array:
@@ -223,17 +212,17 @@ type Fielder struct {
 	Schema any               `json:"-"`
 
 	Children      map[string]*Fielder `json:"-"`
-	FieldsByIndex []string            `json:"-"`
-	escape        bool                `json:"-"`
+	FieldsByIndex map[int]string      `json:"-"`
+	Escape        bool                `json:"-"`
 }
 
 func (f *Fielder) GetFieldsName() []string {
-	if f.Children != nil {
+	if len(f.Children) == 0 {
 		return []string{}
 	}
 	fields := []string{}
-	for k := range f.Children {
-		fields = append(fields, k)
+	for _, field := range f.FieldsByIndex {
+		fields = append(fields, field)
 	}
 	return fields
 }
@@ -263,13 +252,13 @@ func (f *Fielder) MountSchema(v any) (reflect.Value, any) {
 			if len(f.Children) > 0 {
 				for _, c := range f.Children {
 					if c.Required {
-						errs[c.Name] = retMissing(c)
+						errs[c.Name] = RetMissing(c)
 					}
 				}
 				return reflect.Value{}, errs
 			} else {
 				return reflect.Value{}, map[string]any{
-					f.Name: retMissing(f),
+					f.Name: RetMissing(f),
 				}
 			}
 		}
@@ -287,13 +276,24 @@ func (f *Fielder) MountSchema(v any) (reflect.Value, any) {
 		}
 		sch = reflect.New(_sch).Elem()
 		schV := reflect.ValueOf(v)
-		if !SetReflectValue(sch, &schV, f.escape) {
-			return reflect.Value{}, retInvalidType(f)
+
+		if f.IsPointer {
+			if sch.Kind() != reflect.Ptr && sch.CanAddr() {
+				sch = sch.Addr()
+			}
+		} else if sch.Kind() == reflect.Ptr {
+			sch = sch.Elem()
+		}
+
+		if !SetReflectValue(sch, &schV, f.Escape) {
+			return reflect.Value{}, RetInvalidType(f)
 		}
 	case reflect.Array, reflect.Slice:
 		schVal := reflect.ValueOf(v)
-		if schVal.Kind() != reflect.Slice {
-			errs = retInvalidType(f)
+
+		if k := schVal.Kind(); k != reflect.Slice {
+			errs = RetInvalidType(f)
+			break
 		}
 
 		sliceOf := reflect.TypeOf(f.SliceType.Schema)
@@ -312,7 +312,25 @@ func (f *Fielder) MountSchema(v any) (reflect.Value, any) {
 				}
 			}
 			sItem := sch.Index(i)
+			if !sItem.IsValid() {
+				continue
+			}
+
+			if f.SliceType.IsPointer {
+				if slicSch.Kind() != reflect.Ptr && slicSch.CanAddr() {
+					slicSch = slicSch.Addr()
+				}
+			} else {
+				if slicSch.Kind() == reflect.Ptr {
+					slicSch = slicSch.Elem()
+				}
+			}
 			sItem.Set(slicSch)
+		}
+		if sch.Len() == 0 {
+			if f.Required {
+				_errs = append(_errs, RetMissing(f))
+			}
 		}
 		if len(_errs) > 0 {
 			if len(_errs) == 1 {
@@ -322,12 +340,12 @@ func (f *Fielder) MountSchema(v any) (reflect.Value, any) {
 			}
 		}
 	case reflect.Struct:
-		data, ok := v.(map[string]any)
 		_errs := []any{}
+		data, ok := v.(map[string]any)
 		if !ok {
 			for _, fielder := range f.Children {
 				if fielder.Required {
-					_errs = append(_errs, retMissing(fielder))
+					_errs = append(_errs, RetMissing(fielder))
 				}
 			}
 			return reflect.Value{}, _errs
@@ -339,29 +357,31 @@ func (f *Fielder) MountSchema(v any) (reflect.Value, any) {
 		sch = reflect.New(_sch).Elem()
 
 		for i := 0; i < sch.NumField(); i++ {
-			fieldName := f.FieldsByIndex[i]
-			fielder := f.Children[fieldName]
+			fieldName, ok := f.FieldsByIndex[i]
+			if ok {
+				fielder := f.Children[fieldName]
 
-			schF := sch.FieldByName(fieldName)
-			value, ok := data[fielder.Name]
-			if !ok {
-				value, ok = data[fielder.RealName]
-			}
-			if !ok {
-				if fielder.Required {
-					_errs = append(_errs, map[string]any{fielder.Name: retMissing(fielder)})
+				schF := sch.FieldByName(fieldName)
+				value, ok := data[fielder.Name]
+				if !ok {
+					value, ok = data[fielder.RealName]
 				}
-				continue
-			}
-			rv, __errs := fielder.MountSchema(value)
-			if __errs != nil {
-				_errs = append(_errs, __errs)
-				continue
-			}
+				if !ok || value == nil {
+					if fielder.Required {
+						_errs = append(_errs, map[string]any{fielder.Name: RetMissing(fielder)})
+					}
+					continue
+				}
+				rv, __errs := fielder.MountSchema(value)
+				if __errs != nil {
+					_errs = append(_errs, __errs)
+					continue
+				}
 
-			if !SetReflectValue(schF, &rv, false) {
-				_errs = append(_errs, map[string]any{fielder.Name: retInvalidType(fielder)})
-				continue
+				if !SetReflectValue(schF, &rv, false) {
+					_errs = append(_errs, map[string]any{fielder.Name: RetInvalidType(fielder)})
+					continue
+				}
 			}
 		}
 		if len(_errs) > 0 {
@@ -374,7 +394,13 @@ func (f *Fielder) MountSchema(v any) (reflect.Value, any) {
 	}
 
 	if f.IsPointer {
-		sch = sch.Addr()
+		if sch.Kind() != reflect.Ptr && sch.CanAddr() {
+			sch = sch.Addr()
+		}
+	} else {
+		if sch.Kind() == reflect.Ptr {
+			sch = sch.Elem()
+		}
 	}
 	if errs != nil {
 		if f.Name != "" {
@@ -402,10 +428,15 @@ func (f *Fielder) Mount(data any) (any, error) {
 		return nil, errors.New(string(e))
 	}
 	if f.IsPointer {
-		if sch.Kind() == reflect.Pointer {
-			return sch.Interface(), nil
+		if sch.Kind() != reflect.Pointer {
+			if sch.CanAddr() {
+				return sch.Addr().Interface(), nil
+			}
 		}
-		return sch.Addr().Interface(), nil
+	} else {
+		if sch.Kind() == reflect.Pointer {
+			return sch.Elem().Interface(), nil
+		}
 	}
 	return sch.Interface(), nil
 }
@@ -416,20 +447,4 @@ func (f *Fielder) String() string {
 		return ""
 	}
 	return string(s)
-}
-
-func retInvalidType(f *Fielder) map[string]any {
-	return map[string]any{
-		"field":    f.Name,
-		"message":  "invalid type",
-		"required": f.Required,
-	}
-}
-
-func retMissing(f *Fielder) map[string]any {
-	return map[string]any{
-		"field":    f.Name,
-		"message":  "missing",
-		"required": f.Required,
-	}
 }
