@@ -1,6 +1,8 @@
 package c3po
 
-import "strings"
+import (
+	"strings"
+)
 
 var htmlReplacer = strings.NewReplacer(
 	"&", "&amp;",

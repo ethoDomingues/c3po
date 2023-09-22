@@ -76,11 +76,13 @@ func parseTags(tag string) map[string]string {
 		if pair == "" {
 			continue
 		}
+
 		kv := strings.Split(pair, "=")
-		if len(kv) != 2 {
-			kvTags[kv[0]] = ""
+		key := strings.ToLower(kv[0])
+		if len(kv) == 1 {
+			kvTags[key] = ""
 		} else {
-			kvTags[kv[0]] = strings.ToLower(kv[1])
+			kvTags[key] = kv[1]
 		}
 	}
 	return kvTags
@@ -108,18 +110,19 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 	}
 
 	v, ok := tags["escape"]
-	f.Escape = (ok && (v == "" || v == "true"))
+	f.Escape = (ok && (v == "" || strings.ToLower(v) == "true"))
 
 	f.RealName = tags["realName"]
 
 	v, ok = tags["required"]
-	f.Required = !(ok && (v == "false"))
+	f.Required = !(ok && (strings.ToLower(v) == "false"))
 
 	if v, ok := tags["name"]; ok && v != "" {
 		f.Name = v
 	} else {
 		f.Name = strings.ToLower(f.RealName)
 	}
+
 	if rv.Kind() == reflect.Pointer {
 		f.IsPointer = true
 		rTmp := rv.Elem()
@@ -225,24 +228,6 @@ func (f *Fielder) GetFieldsName() []string {
 		fields = append(fields, field)
 	}
 	return fields
-}
-
-func (f *Fielder) ToMap() map[string]any {
-	data := map[string]any{}
-	if f.Name != "" {
-		data["name"] = f.Name
-	} else {
-		data["name"] = f.RealName
-	}
-
-	if len(f.Children) > 0 {
-		dfs := map[string]any{}
-		for _, ff := range f.Children {
-			dfs[ff.RealName] = ff.ToMap()
-		}
-		data["fields"] = dfs
-	}
-	return data
 }
 
 func (f *Fielder) MountSchema(v any) (reflect.Value, any) {
@@ -439,6 +424,36 @@ func (f *Fielder) Mount(data any) (any, error) {
 		}
 	}
 	return sch.Interface(), nil
+}
+
+func (f *Fielder) ToMap() map[string]any {
+	data := map[string]any{
+		"required": f.Required,
+	}
+	switch f.Type {
+	default:
+		data["type"] = f.Type.String()
+	case reflect.Struct:
+		break
+	case reflect.Float64, reflect.Float32, reflect.Int, reflect.Int64, reflect.Int32:
+		data["type"] = "number"
+		data["format"] = f.Type.String()
+	}
+
+	if len(f.Children) > 0 {
+		dfs := map[string]any{}
+		for _, ff := range f.Children {
+			dfs[ff.RealName] = ff.ToMap()
+		}
+		data["properties"] = dfs
+	}
+	return data
+}
+
+func (f *Fielder) ToJSON() string {
+	d := f.ToMap()
+	b, _ := json.MarshalIndent(d, "", "  ")
+	return string(b)
 }
 
 func (f *Fielder) String() string {
