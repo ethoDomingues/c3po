@@ -1,465 +1,163 @@
 package c3po
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"reflect"
-	"strconv"
 	"strings"
 )
 
-func convert(v *reflect.Value, t reflect.Type, stringEscape bool) bool {
-	defer try()
-	if v.Kind() == t.Kind() {
-		return true
+// return a []map, map or a simple value. Depende doq vc passou como argumento
+func encode(v any) (any, error) {
+	if v == nil {
+		return nil, errors.New("'v' is nil")
+	}
+	if r, ok := v.(reflect.Value); ok {
+		return encode(r.Interface())
 	}
 
-	switch t.Kind() {
-	case reflect.Float32, reflect.Float64:
-		switch v.Kind() {
-		case reflect.String:
-			i, err := strconv.ParseFloat(v.Interface().(string), 64)
-			if err != nil {
-				return false
-			}
-			*v = reflect.ValueOf(i).Convert(t)
-		case reflect.Int, reflect.Int64:
-			*v = v.Convert(t)
-		case reflect.Float32, reflect.Float64:
-			*v = v.Convert(t)
-		}
-	case reflect.Int, reflect.Int64:
-		switch v.Kind() {
-		case reflect.String:
-			val, err := strconv.ParseFloat(v.Interface().(string), 64)
-			if err != nil {
-				return false
-			}
-			*v = reflect.ValueOf(val).Convert(t)
-		case reflect.Float32, reflect.Float64:
-			*v = v.Convert(t)
-		default:
-			return false
-		}
-	case reflect.Bool:
-		if v.Kind() != reflect.String {
-			return false
-		}
-
-		b := strings.ToLower(v.Interface().(string))
-		if b == "true" {
-			*v = reflect.ValueOf(true)
-		} else if b == "false" {
-			*v = reflect.ValueOf(false)
-		} else {
-			return false
-		}
-
-	case reflect.String:
-		nv := fmt.Sprint(v.Interface())
-		if stringEscape {
-			nv = htmlReplacer.Replace(nv)
-		}
-		*v = reflect.ValueOf(nv)
-
-	}
-	return true
-}
-
-func parseTags(tag string) map[string]string {
-	kvTags := map[string]string{}
-
-	pairs := strings.Split(tag, ",")
-	for _, pair := range pairs {
-		pair = strings.TrimSpace(pair)
-		if pair == "" {
-			continue
-		}
-
-		kv := strings.Split(pair, "=")
-		key := strings.ToLower(kv[0])
-		if len(kv) == 1 {
-			kvTags[key] = ""
-		} else {
-			kvTags[key] = kv[1]
-		}
-	}
-	return kvTags
-}
-
-func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
-
-	rv := reflect.ValueOf(schema)
-	rt := reflect.TypeOf(schema)
-	f := &Fielder{}
-
-	if rt.Kind() == reflect.Ptr {
-		f.IsPointer = true
-		rt = rt.Elem()
-		rv = rv.Elem()
-	}
-
-	f.Type = rt.Kind()
-	f.Tags = tags
-	f.Schema = schema
-	f.Children = map[string]*Fielder{}
-
-	if _, ok := tags["-"]; ok {
-		return nil
-	}
-
-	v, ok := tags["escape"]
-	f.Escape = (ok && (v == "" || strings.ToLower(v) == "true"))
-
-	f.RealName = tags["realName"]
-
-	v, ok = tags["required"]
-	f.Required = !(ok && (strings.ToLower(v) == "false"))
-
-	if v, ok := tags["name"]; ok && v != "" {
-		f.Name = v
-	} else {
-		f.Name = strings.ToLower(f.RealName)
-	}
-
+	errs := bytes.NewBufferString("")
+	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Pointer {
-		f.IsPointer = true
-		rTmp := rv.Elem()
-		if rTmp.IsValid() {
-			rv = rTmp
-			rt = rt.Elem()
+		rv2 := rv.Elem()
+		if rv2.IsValid() {
+			rv = rv2
 		}
 	}
-	if !rv.IsValid() {
-		rv = reflect.New(rt).Elem()
-		if rv.Kind() == reflect.Ptr {
+
+	rt := rv.Type()
+	switch rv.Kind() {
+	default:
+		return v, nil
+	case reflect.Func:
+		return "what the fuck, it's a func?????", errors.New("unsupported type" + rv.Kind().String())
+	case reflect.Pointer:
+		if rv.Elem().IsValid() {
+			return Encode(rv.Elem())
+		} else if rv.CanInterface() {
+			return rv.Interface(), nil
+		} else {
+			return nil, errors.New("sei la, só não consegui pegar o valor de 'v'")
+		}
+	case reflect.Struct:
+		d := map[string]any{}
+		for i := 0; i < rv.NumField(); i++ {
+			f := rv.Field(i)
+			if !f.IsValid() || !f.CanInterface() {
+				continue
+			}
+			ft := rt.Field(i)
+			if fv, err := Encode(f.Interface()); err == nil {
+				d[strings.ToLower(ft.Name)] = fv
+			} else {
+				errs.WriteString(err.Error())
+			}
+		}
+		return d, nil
+	case reflect.Slice, reflect.Array:
+		return encodeSlice(v)
+	case reflect.Map:
+		return encodeMap(v)
+	}
+}
+
+func encodeSlice(v any) (any, error) {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Pointer && rv.IsValid() {
+		if rv.Elem().IsValid() {
 			rv = rv.Elem()
 		}
 	}
-
-	switch rt.Kind() {
-	case reflect.Struct:
-		f.FieldsByIndex = map[int]string{}
-		for i := 0; i < rt.NumField(); i++ {
-			fv := rv.Field(i)
-			if fv.CanInterface() {
-				ft := rt.Field(i)
-				childTags := parseTags(ft.Tag.Get(tagKey))
-				if _, ok := childTags["-"]; ok {
-					continue
-				}
-				childTags["realName"] = strings.ToLower(ft.Name)
-				if v, ok := childTags["name"]; ok && v != "" {
-					childTags["name"] = v
-				} else {
-					childTags["name"] = strings.ToLower(ft.Name)
-				}
-				child := parseSchema(fv.Interface(), tagKey, childTags)
-				f.FieldsByIndex[i] = ft.Name
-				if child != nil {
-					f.Children[ft.Name] = child
-				}
-			}
-		}
-	case reflect.Slice, reflect.Array:
-		f.Type = reflect.Slice
-		f.IsSlice = true
-
-		sliceObjet := reflect.New(rv.Type().Elem()).Elem()
-		f.SliceType = parseSchema(sliceObjet.Interface(), tagKey, map[string]string{"realName": ""})
+	if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
+		return nil, errors.New("'v' not is a Slice or Array ")
 	}
 
-	if f.IsSlice {
-		v, ok = tags["strict"]
-		f.SliceStrict = !(ok && (v == "false"))
-	}
-
-	return f
-}
-
-func SetReflectValue(r reflect.Value, v *reflect.Value, escape bool) bool {
-	if v.IsValid() {
-		c := convert(v, r.Type(), escape)
-		if c {
-			r.Set(*v)
-			return true
+	errs := bytes.NewBufferString("")
+	d := reflect.MakeSlice(reflect.TypeOf([]any{}), rv.Len(), rv.Cap())
+	for i := 0; i < rv.Len(); i++ {
+		f := rv.Index(i)
+		if !f.IsValid() || !f.CanInterface() {
+			continue
 		}
-	}
-	return false
-}
-
-func ParseSchemaWithTag(tagKey string, schema any) *Fielder {
-	tags := map[string]string{
-		"realName": reflect.TypeOf(schema).Name(),
-	}
-	return parseSchema(schema, tagKey, tags)
-}
-
-func ParseSchema(schema any) *Fielder {
-	return ParseSchemaWithTag("c3po", schema)
-}
-
-type Fielder struct {
-	Name     string `json:"name"`
-	Required bool   `json:"required"`
-	RealName string `json:"-"`
-
-	IsPointer   bool     `json:"-"`
-	IsSlice     bool     `json:"-"`
-	SliceStrict bool     `json:"-"`
-	SliceType   *Fielder `json:"-"`
-
-	Type   reflect.Kind      `json:"type"`
-	Tags   map[string]string `json:"-"`
-	Schema any               `json:"-"`
-
-	Children      map[string]*Fielder `json:"-"`
-	FieldsByIndex map[int]string      `json:"-"`
-	Escape        bool                `json:"-"`
-}
-
-func (f *Fielder) GetFieldsName() []string {
-	if len(f.Children) == 0 {
-		return []string{}
-	}
-	fields := []string{}
-	for _, field := range f.FieldsByIndex {
-		fields = append(fields, field)
-	}
-	return fields
-}
-
-func (f *Fielder) MountSchema(v any) (reflect.Value, any) {
-	if v == nil {
-		if f.Required {
-			errs := map[string]any{}
-			if len(f.Children) > 0 {
-				for _, c := range f.Children {
-					if c.Required {
-						errs[c.Name] = RetMissing(c)
-					}
-				}
-				return reflect.Value{}, errs
-			} else {
-				return reflect.Value{}, map[string]any{
-					f.Name: RetMissing(f),
-				}
-			}
-		}
-		return reflect.Value{}, nil
-	}
-
-	var errs any
-	var sch reflect.Value
-
-	switch f.Type {
-	default:
-		_sch := reflect.TypeOf(f.Schema)
-		if _sch.Kind() == reflect.Ptr {
-			_sch = _sch.Elem()
-		}
-		sch = reflect.New(_sch).Elem()
-		schV := reflect.ValueOf(v)
-
-		if f.IsPointer {
-			if sch.Kind() != reflect.Ptr && sch.CanAddr() {
-				sch = sch.Addr()
-			}
-		} else if sch.Kind() == reflect.Ptr {
-			sch = sch.Elem()
-		}
-
-		if !SetReflectValue(sch, &schV, f.Escape) {
-			return reflect.Value{}, RetInvalidType(f)
-		}
-	case reflect.Array, reflect.Slice:
-		schVal := reflect.ValueOf(v)
-
-		if k := schVal.Kind(); k != reflect.Slice {
-			errs = RetInvalidType(f)
-			break
-		}
-
-		sliceOf := reflect.TypeOf(f.SliceType.Schema)
-		lenSlice := schVal.Len()
-		sch = reflect.MakeSlice(reflect.SliceOf(sliceOf), lenSlice, lenSlice)
-		_errs := []any{}
-		for i := 0; i < lenSlice; i++ {
-			s := schVal.Index(i)
-			sf := f.SliceType
-
-			slicSch, err := sf.MountSchema(s.Interface().(map[string]any))
-			if err != nil {
-				_errs = append(_errs, err)
-				if f.SliceStrict {
-					break
-				}
-			}
-			sItem := sch.Index(i)
-			if !sItem.IsValid() {
-				continue
-			}
-
-			if f.SliceType.IsPointer {
-				if slicSch.Kind() != reflect.Ptr && slicSch.CanAddr() {
-					slicSch = slicSch.Addr()
-				}
-			} else {
-				if slicSch.Kind() == reflect.Ptr {
-					slicSch = slicSch.Elem()
-				}
-			}
-			sItem.Set(slicSch)
-		}
-		if sch.Len() == 0 {
-			if f.Required {
-				_errs = append(_errs, RetMissing(f))
-			}
-		}
-		if len(_errs) > 0 {
-			if len(_errs) == 1 {
-				errs = _errs[0]
-			} else {
-				errs = _errs
-			}
-		}
-	case reflect.Struct:
-		_errs := []any{}
-		data, ok := v.(map[string]any)
-		if !ok {
-			for _, fielder := range f.Children {
-				if fielder.Required {
-					_errs = append(_errs, RetMissing(fielder))
-				}
-			}
-			return reflect.Value{}, _errs
-		}
-		_sch := reflect.TypeOf(f.Schema)
-		if _sch.Kind() == reflect.Ptr {
-			_sch = _sch.Elem()
-		}
-		sch = reflect.New(_sch).Elem()
-
-		for i := 0; i < sch.NumField(); i++ {
-			fieldName, ok := f.FieldsByIndex[i]
-			if ok {
-				fielder := f.Children[fieldName]
-
-				schF := sch.FieldByName(fieldName)
-				value, ok := data[fielder.Name]
-				if !ok {
-					value, ok = data[fielder.RealName]
-				}
-				if !ok || value == nil {
-					if fielder.Required {
-						_errs = append(_errs, map[string]any{fielder.Name: RetMissing(fielder)})
-					}
-					continue
-				}
-				rv, __errs := fielder.MountSchema(value)
-				if __errs != nil {
-					_errs = append(_errs, __errs)
-					continue
-				}
-
-				if !SetReflectValue(schF, &rv, false) {
-					_errs = append(_errs, map[string]any{fielder.Name: RetInvalidType(fielder)})
-					continue
-				}
-			}
-		}
-		if len(_errs) > 0 {
-			if len(_errs) == 1 {
-				errs = _errs[0]
-			} else {
-				errs = _errs
-			}
-		}
-	}
-
-	if f.IsPointer {
-		if sch.Kind() != reflect.Ptr && sch.CanAddr() {
-			sch = sch.Addr()
-		}
-	} else {
-		if sch.Kind() == reflect.Ptr {
-			sch = sch.Elem()
-		}
-	}
-	if errs != nil {
-		if f.Name != "" {
-			return sch, map[string]any{f.Name: errs}
-		}
-		if slcErr, ok := errs.([]any); ok && len(slcErr) == 1 {
-			return sch, slcErr[0]
+		if fv, err := Encode(f.Interface()); err == nil {
+			d.Index(i).Set(reflect.ValueOf(fv))
 		} else {
-			if mapErrs, ok := errs.(map[string]any); ok && len(mapErrs) == 1 {
-				for _, err := range mapErrs {
-					return sch, err
-				}
-			}
-			return sch, errs
+			errs.WriteString(err.Error())
 		}
-
 	}
-	return sch, nil
+	data := d.Interface()
+	if errs.Len() > 0 {
+		return data, errors.New(errs.String())
+	}
+	return data, nil
 }
 
-func (f *Fielder) Mount(data any) (any, error) {
-	sch, err := f.MountSchema(data)
+func encodeMap(v any) (any, error) {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Pointer && rv.IsValid() {
+		if rv.Elem().IsValid() {
+			rv = rv.Elem()
+		}
+	}
+	if rv.Kind() != reflect.Map {
+		return nil, errors.New("'v' not is a Map")
+	}
+
+	errs := bytes.NewBufferString("")
+	m := reflect.MakeMap(reflect.TypeOf(map[string]any{}))
+
+	for _, key := range rv.MapKeys() {
+		f := rv.MapIndex(key)
+		if !f.IsValid() || !f.CanInterface() {
+			continue
+		}
+		fdata, err := encode(f.Interface())
+		if err != nil {
+			panic(err)
+		}
+		elem := reflect.ValueOf(fdata)
+		m.SetMapIndex(key, elem)
+	}
+	data := m.Interface()
+	if errs.Len() > 0 {
+		return data, errors.New(errs.String())
+	}
+	return data, nil
+}
+
+// Transforms a complex struct into a map or a []map
+func Encode(v ...any) (any, error) {
+	if v == nil {
+		panic("'v' is nil")
+	}
+	vals := []any{}
+	errs := bytes.NewBufferString("")
+	for _, val := range v {
+		if _v, err := encode(val); err == nil {
+			vals = append(vals, _v)
+		} else {
+			errs.WriteString(err.Error())
+		}
+	}
+	var _e error
+	if errs.Len() > 0 {
+		_e = errors.New(errs.String())
+	}
+	if len(vals) == 1 {
+		return vals[0], _e
+	}
+	return vals, _e
+}
+
+func EncodeToJSON(v ...any) (string, error) {
+	d, err := Encode(v...)
 	if err != nil {
-		e, _ := json.MarshalIndent(err, "", "    ")
-		return nil, errors.New(string(e))
+		return "", err
 	}
-	if f.IsPointer {
-		if sch.Kind() != reflect.Pointer {
-			if sch.CanAddr() {
-				return sch.Addr().Interface(), nil
-			}
-		}
-	} else {
-		if sch.Kind() == reflect.Pointer {
-			return sch.Elem().Interface(), nil
-		}
-	}
-	return sch.Interface(), nil
-}
-
-func (f *Fielder) ToMap() map[string]any {
-	data := map[string]any{
-		"required": f.Required,
-	}
-	switch f.Type {
-	default:
-		data["type"] = f.Type.String()
-	case reflect.Struct:
-		break
-	case reflect.Float64, reflect.Float32, reflect.Int, reflect.Int64, reflect.Int32:
-		data["type"] = "number"
-		data["format"] = f.Type.String()
-	}
-
-	if len(f.Children) > 0 {
-		dfs := map[string]any{}
-		for _, ff := range f.Children {
-			dfs[ff.RealName] = ff.ToMap()
-		}
-		data["properties"] = dfs
-	}
-	return data
-}
-
-func (f *Fielder) ToJSON() string {
-	d := f.ToMap()
-	b, _ := json.MarshalIndent(d, "", "  ")
-	return string(b)
-}
-
-func (f *Fielder) String() string {
-	s, err := json.MarshalIndent(f, "", "  ")
+	b, err := json.MarshalIndent(d, "", "	")
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return string(s)
+	return string(b), nil
 }
