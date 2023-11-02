@@ -72,27 +72,29 @@ Output:
 ```sh
 $ go run .
 {
- "Name": "",
+ "UUID": "",
+ "Name": "tião",
  "Email": ""
 }
-
 {
+ "UUID": "aaaa-aaaa-aaaa",
  "Name": "tião",
  "Email": "tião@localhost"
 }
-
 {
+ "UUID": "",
  "Name": "",
  "Email": "",
- "Curse": ""
+ "Curse": null
 }
-
 {
- "Name": "tião",
+ "UUID": "aaaa-aaaa-aaaa",
+ "Name": "",
  "Email": "tião@localhost",
- "Curse": "mechanic"
+ "Curse": {
+  "Name": "mechanic",
+  "Duration": "infinit"
 }
-
 ```
 
 ### Struct Tags Allowed
