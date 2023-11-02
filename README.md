@@ -11,52 +11,60 @@ import (
  "encoding/json"
  "fmt"
 
- "github.com/ethodomingues/c3po"
+ "github.com/ethoDomingues/c3po"
 )
 
+type Model struct {
+ UUID string
+}
 type User struct {
- Name,
- Email string
+ Model `c3po:"heritage"`
+ Name  string `c3po:"name=username"`
+ Email string `c3po:"required"`
 }
 
 type Studant struct {
  User
- Curse string
+ Curse *Curse `c3po:"recursive=false"`
+}
+
+type Curse struct {
+ Name     string
+ Duration string
 }
 
 func main() {
  var userData = map[string]any{
-  "name":  "tião",
+  "uuid":  "aaaa-aaaa-aaaa", // here 'uuid' is inheritance from 'model'
   "email": "tião@localhost",
  }
 
  var studantData = map[string]any{
-  "user":  userData,
-  "curse": "mechanic",
+  "user": userData,
+  "curse": &Curse{
+   Name:     "mechanic",
+   Duration: "infinity",
+  },
  }
 
- u := &User{}
+ u := &User{Name: "tião"} // here the 'name' field has a default value
  userSchema := c3po.ParseSchema(u)
- u2, _err_ := userSchema.Mount(userData)
+ u2, _ := userSchema.Decode(userData)
  Print(u)
  Print(u2)
 
  s := &Studant{}
  studantSchema := c3po.ParseSchema(s)
- s2, _ := studantSchema.Mount(studantData)
+ s2, _ := studantSchema.Decode(studantData)
  Print(s)
  Print(s2)
 
 }
 
 func Print(v any) {
- if b, err := json.MarshalIndent(v, "", " "); err != nil {
-  fmt.Println("{}")
- } else {
-  fmt.Println(string(b))
- }
+ b, _ := json.MarshalIndent(v, "", " ")
+ fmt.Println(string(b))
 }
-
 ```
 
 Output:
