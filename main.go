@@ -155,7 +155,7 @@ func EncodeToJSON(v ...any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	b, err := json.MarshalIndent(d, "", "	")
+	b, err := json.Marshal(d)
 	if err != nil {
 		return "", err
 	}

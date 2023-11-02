@@ -34,20 +34,10 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 		return nil
 	}
 
-	v, ok := tags["escape"]
-	f.Escape = (ok && (v == "" || strings.ToLower(v) == "true"))
-
 	f.RealName = tags["realName"]
-
 	if f.RealName == "" {
 		f.RealName = rt.Name()
 	}
-
-	v, ok = tags["required"]
-	f.Required = ok && (strings.ToLower(v) == "true")
-
-	v, ok = tags["skiponerr"]
-	f.SkipOnErr = ok && (strings.ToLower(v) == "true") && !f.Required
 
 	if v, ok := tags["name"]; ok && v != "" {
 		f.Name = v
@@ -55,10 +45,25 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 		f.Name = f.RealName
 	}
 
+	v, ok := tags["escape"]
+	f.Escape = (ok && (strings.ToLower(v) == "true"))
+
+	v, ok = tags["required"]
+	f.Required = ok && (strings.ToLower(v) == "true")
+
+	v, ok = tags["recursive"]
+	f.Recursive = !ok || strings.ToLower(v) != "false"
+
+	v, ok = tags["nullable"]
+	f.Nullable = ok && strings.ToLower(v) == "true"
+
+	v, ok = tags["skiponerr"] // skip field on err
+	f.SkipOnErr = ok && (strings.ToLower(v) == "true") && !f.Required
+
 	if rv.Kind() == reflect.Pointer {
 		f.IsPointer = true
 		rTmp := rv.Elem()
-		if rTmp.IsValid() {
+		if rTmp.Kind() == reflect.Pointer {
 			rv = rTmp
 			rt = rt.Elem()
 		}
@@ -72,6 +77,7 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 
 	switch rt.Kind() {
 	case reflect.Struct:
+		f.IsStruct = true
 		f.FieldsByIndex = map[int]string{}
 		for i := 0; i < rt.NumField(); i++ {
 			fv := rv.Field(i)
@@ -93,27 +99,17 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 				child := parseSchema(fv.Interface(), tagKey, childTags)
 				f.FieldsByIndex[i] = cname
 				if child != nil {
-					child.Index = i
+					child.SuperIndex = &i
 					f.Children[cname] = child
-					if v, ok := childTags["join"]; ok && strings.ToLower(v) == "true" {
-						if f.JoinsFielders == nil {
-							f.JoinsFielders = map[string]*Fielder{}
-						}
-						f.JoinsFielders[cname] = child
-						for k, v := range child.Children {
-							v.SuperIndex = i
-							v.SuperName = ft.Name
-							f.Children[k] = v
-						}
+					if v, ok := childTags["heritage"]; ok && strings.ToLower(v) == "true" {
+						child.Heritage = true
 					}
 				}
 			}
 		}
-
 	case reflect.Slice, reflect.Array:
 		f.Type = reflect.Slice
 		f.IsSlice = true
-
 		sliceObjet := reflect.New(rv.Type().Elem()).Elem()
 		f.SliceType = parseSchema(sliceObjet.Interface(), tagKey, map[string]string{"realName": ""})
 	case reflect.Map:
@@ -124,14 +120,6 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 		f.MapValueType = parseSchema(mapValue.Interface(), tagKey, map[string]string{"realName": ""})
 	}
 
-	if f.IsSlice {
-		v, ok = tags["strict"]
-		f.SliceStrict = !(ok && (v == "false"))
-	}
-	if f.IsMAP {
-		v, ok = tags["strict"]
-		f.SliceStrict = !(ok && (v == "false"))
-	}
 	if rv.CanInterface() && !rv.IsZero() {
 		def, err := encode(rv.Interface())
 		if err != nil {
@@ -139,8 +127,8 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 			if n == "" {
 				n = f.RealName
 			}
-			log.Println(err)
 			log.Printf("warn: Default Value is invalid into fielder: '%s'\n", n)
+			log.Println(err)
 		} else {
 			f.Default = def
 		}
@@ -159,36 +147,230 @@ func ParseSchema(schema any) *Fielder {
 	return ParseSchemaWithTag("c3po", schema)
 }
 
+func reflectOf(v any) reflect.Value {
+	var rv = reflect.ValueOf(v)
+	if rv.Kind() == reflect.Pointer {
+		if rv2 := rv.Elem(); rv2.Kind() == reflect.Pointer {
+			rv = rv2
+		}
+	}
+	return rv
+}
+
 type Fielder struct {
-	Name      string `json:"name"`
-	Required  bool   `json:"required"`
-	RealName  string `json:"-"`
-	Escape    bool   `json:"-"`
-	SkipOnErr bool
+	Name     string
+	RealName string
 
-	IsPointer bool `json:"-"`
-	Default   any
+	Default any
+	Schema  any
 
-	IsSlice     bool     `json:"-"`
-	SliceStrict bool     `json:"-"`
-	SliceType   *Fielder `json:"-"`
+	Escape    bool // default: false
+	Required  bool // default: false
+	Nullable  bool // default: false
+	Heritage  bool // default: false
+	Recursive bool // default: true
+	SkipOnErr bool // default: false
 
-	Join          bool                `json:"-"`
-	JoinsFielders map[string]*Fielder `json:"-"`
-	SuperIndex    int
-	SuperName     string
+	IsMAP,
+	IsSlice,
+	IsStruct,
+	IsPointer bool
 
-	IsMAP        bool
-	MapKeyType   *Fielder
+	SliceType,
+	MapKeyType,
 	MapValueType *Fielder
 
-	Type   reflect.Kind      `json:"type"`
-	Tags   map[string]string `json:"-"`
-	Index  int
-	Schema any `json:"-"`
+	Type reflect.Kind
+	Tags map[string]string
 
-	Children      map[string]*Fielder `json:"-"`
-	FieldsByIndex map[int]string      `json:"-"`
+	SuperIndex *int // if a field to a struct
+
+	Children      map[string]*Fielder
+	FieldsByIndex map[int]string
+}
+
+func (f *Fielder) decodePrimitive(rv reflect.Value) (sch reflect.Value, err any) {
+	sch = GetReflectElem(f.New())
+	if !SetReflectValue(sch, rv, f.Escape) {
+		if !f.SkipOnErr {
+			return reflect.Value{}, RetInvalidType(f)
+		}
+	}
+	return
+}
+
+func (f *Fielder) decodeSlice(rv reflect.Value) (sch reflect.Value, err any) {
+	sliceOf := reflect.TypeOf(f.SliceType.Schema)
+	lenSlice := rv.Len()
+	capSlice := rv.Cap()
+
+	sch = reflect.MakeSlice(reflect.SliceOf(sliceOf), lenSlice, capSlice)
+
+	errs := []any{}
+	for i := 0; i < lenSlice; i++ {
+		var (
+			s       = GetReflectElem(rv.Index(i))
+			sf      = f.SliceType
+			err     any
+			slicSch reflect.Value
+		)
+
+		if f.Recursive {
+			slicSch, err = sf.decodeSchema(s.Interface())
+		} else {
+			if sliceOf == s.Type() {
+				slicSch = s
+			} else {
+				err = RetInvalidType(f.SliceType)
+			}
+		}
+
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		sIndex := sch.Index(i)
+		if f.SliceType.IsPointer {
+			if slicSch.Kind() != reflect.Ptr && slicSch.CanAddr() {
+				slicSch = slicSch.Addr()
+			}
+		} else {
+			if slicSch.Kind() == reflect.Ptr {
+				slicSch = slicSch.Elem()
+			}
+		}
+		sIndex.Set(slicSch)
+	}
+	if sch.Len() == 0 {
+		if f.Required {
+			errs = append(errs, RetMissing(f))
+		}
+	}
+	if len(errs) > 0 {
+		if len(errs) == 1 {
+			err = errs[0]
+		} else {
+			err = errs
+		}
+	}
+	return
+}
+
+func (f *Fielder) decodeMap(rv reflect.Value) (sch reflect.Value, err any) {
+	if rv.Kind() == reflect.Pointer {
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Map || !rv.IsValid() {
+		err = map[string]any{f.Name: RetInvalidType(f)}
+		return
+	}
+	mt := reflect.TypeOf(f.Schema)
+	m := reflect.MakeMap(mt)
+	for _, key := range rv.MapKeys() {
+		mindex := rv.MapIndex(key)
+
+		mkey, _err := f.MapKeyType.decodeSchema(key.Interface())
+		if _err != nil {
+			err = _err
+			return
+		}
+		mval, _err := f.MapValueType.decodeSchema(mindex.Interface())
+		if err != nil {
+			err = _err
+			return
+		}
+		m.SetMapIndex(mkey, mval)
+	}
+	sch = m
+	return
+}
+
+func (f *Fielder) decodeStruct(rv reflect.Value, v any) (sch reflect.Value, err any) {
+	errs := []any{}
+	data, ok := v.(map[string]any)
+	if !ok {
+		_data, _err := Encode(v)
+		if _err != nil {
+			err = _err
+			return
+		}
+		data, ok = _data.(map[string]any)
+		if !ok {
+			if !f.SkipOnErr {
+				err = RetInvalidType(f)
+				return
+			}
+			return f.New(), nil
+		}
+	}
+
+	sch = f.New().Elem()
+	for i := 0; i < sch.NumField(); i++ {
+		schF := sch.Field(i)
+		if !schF.CanInterface() {
+			continue
+		}
+
+		var value any
+		fName := f.FieldsByIndex[i]
+		fielder, ok := f.Children[fName]
+		if !ok {
+			continue
+		}
+		if fielder.Heritage {
+			value = data
+		} else {
+			if value, ok = data[fielder.Name]; !ok {
+				value, ok = data[fielder.RealName]
+				if !ok {
+					if fielder.Default == nil {
+						if fielder.Required {
+							errs = append(errs, map[string]any{fielder.Name: RetMissing(fielder)})
+						}
+						continue
+					}
+					value = fielder.Default
+				}
+			}
+			if value == nil && !fielder.Nullable {
+				if fielder.Default == nil {
+					if fielder.Required {
+						errs = append(errs, map[string]any{fielder.Name: RetMissing(fielder)})
+					}
+					continue
+				}
+				value = fielder.Default
+			}
+		}
+
+		var rvF reflect.Value
+
+		if fielder.Recursive {
+			_rvF, e := fielder.decodeSchema(value)
+			if e != nil {
+				errs = append(errs, e)
+				continue
+			}
+			rvF = _rvF
+		} else {
+			rvF = reflect.ValueOf(value)
+		}
+
+		if !SetReflectValue(schF, rvF, false) {
+			if !fielder.SkipOnErr {
+				errs = append(errs, map[string]any{fielder.Name: RetInvalidType(fielder)})
+			}
+			continue
+		}
+	}
+	if len(errs) > 0 {
+		if len(errs) == 1 {
+			err = errs[0]
+		} else {
+			err = errs
+		}
+	}
+	return
 }
 
 func (f *Fielder) decodeSchema(v any) (reflect.Value, any) {
@@ -210,212 +392,20 @@ func (f *Fielder) decodeSchema(v any) (reflect.Value, any) {
 				}
 			}
 		} else {
-			return reflect.Value{}, nil
+			return f.New(), nil
 		}
 	}
-
-	var errs any
-	var sch reflect.Value
-	var rfVal = reflect.ValueOf(v)
-
-	if rfVal.Kind() == reflect.Pointer {
-		rfVal = rfVal.Elem()
-	}
+	var rfVal = reflectOf(v)
 	switch f.Type {
 	default:
-		sch = GetReflectElem(f.New())
-		if !SetReflectValue(sch, rfVal, f.Escape) {
-			if !f.SkipOnErr {
-				return reflect.Value{}, RetInvalidType(f)
-			}
-			return sch, nil
-		}
+		return f.decodePrimitive(rfVal)
 	case reflect.Array, reflect.Slice:
-		if rfVal.Kind() != reflect.Slice {
-			errs = RetInvalidType(f)
-			break
-		}
-
-		sliceOf := reflect.TypeOf(f.SliceType.Schema)
-		lenSlice := rfVal.Len()
-		sch = reflect.MakeSlice(reflect.SliceOf(sliceOf), lenSlice, lenSlice)
-		_errs := []any{}
-		for i := 0; i < lenSlice; i++ {
-			s := rfVal.Index(i)
-			sf := f.SliceType
-
-			slicSch, err := sf.decodeSchema(s.Interface())
-			if err != nil {
-				_errs = append(_errs, err)
-				if f.SliceStrict {
-					break
-				}
-			}
-			sItem := sch.Index(i)
-			if !sItem.IsValid() {
-				continue
-			}
-
-			if f.SliceType.IsPointer {
-				if slicSch.Kind() != reflect.Ptr && slicSch.CanAddr() {
-					slicSch = slicSch.Addr()
-				}
-			} else {
-				if slicSch.Kind() == reflect.Ptr {
-					slicSch = slicSch.Elem()
-				}
-			}
-			sItem.Set(slicSch)
-		}
-		if sch.Len() == 0 {
-			if f.Required {
-				_errs = append(_errs, RetMissing(f))
-			}
-		}
-		if len(_errs) > 0 {
-			if len(_errs) == 1 {
-				errs = _errs[0]
-			} else {
-				errs = _errs
-			}
-		}
-	case reflect.Struct:
-		_errs := []any{}
-		data, ok := v.(map[string]any)
-		if !ok {
-			_data, err := Encode(v)
-			if err != nil {
-				return reflect.Value{}, err
-			}
-			data, ok = _data.(map[string]any)
-			if !ok {
-				if !f.SkipOnErr {
-					return reflect.Value{}, RetInvalidType(f)
-				}
-				return f.New(), nil
-			}
-		}
-
-		sch = f.New().Elem()
-		for i := 0; i < sch.NumField(); i++ {
-			schF := sch.Field(i)
-			if !schF.CanInterface() {
-				continue
-			}
-			var value any
-			fieldJoin := false
-			fieldName := f.FieldsByIndex[i]
-			fielder, ok := f.JoinsFielders[fieldName]
-			if ok {
-				fieldJoin = true
-				_val, err := fielder.decodeSchema(data)
-				if err != nil {
-					_errs = append(_errs, err)
-				}
-				value = _val
-			} else {
-				fielder, ok = f.Children[fieldName]
-				if !ok {
-					continue
-				}
-			}
-			if !fieldJoin {
-				value, ok = data[fielder.Name]
-				if !ok {
-					value, ok = data[fielder.RealName]
-					if !ok {
-						if fielder.Default == nil {
-							if fielder.Required {
-								_errs = append(_errs, map[string]any{fielder.Name: RetMissing(fielder)})
-							}
-							continue
-						}
-						value = fielder.Default
-					}
-				}
-				if value == nil {
-					if fielder.Default == nil {
-						if fielder.Required {
-							_errs = append(_errs, map[string]any{fielder.Name: RetMissing(fielder)})
-						}
-						continue
-					}
-					value = fielder.Default
-				}
-			}
-			rv, __errs := fielder.decodeSchema(value)
-			if __errs != nil {
-				_errs = append(_errs, __errs)
-				continue
-			}
-			if !SetReflectValue(schF, rv, false) {
-				if !fielder.SkipOnErr {
-					_errs = append(_errs, map[string]any{fielder.Name: RetInvalidType(fielder)})
-				}
-				continue
-			}
-
-		}
-		if len(_errs) > 0 {
-			if len(_errs) == 1 {
-				errs = _errs[0]
-			} else {
-				errs = _errs
-			}
-		}
+		return f.decodeSlice(rfVal)
 	case reflect.Map:
-		if rfVal.Kind() == reflect.Pointer {
-			rfVal = rfVal.Elem()
-		}
-		if rfVal.Kind() != reflect.Map || !rfVal.IsValid() {
-			errs = map[string]any{f.Name: RetInvalidType(f)}
-			break
-		}
-		mt := reflect.TypeOf(f.Schema)
-		m := reflect.MakeMap(mt)
-		for _, key := range rfVal.MapKeys() {
-			mindex := rfVal.MapIndex(key)
-
-			mkey, err := f.MapKeyType.decodeSchema(key.Interface())
-			if err != nil {
-				errs = err
-				break
-			}
-			mval, err := f.MapValueType.decodeSchema(mindex.Interface())
-			if err != nil {
-				errs = err
-				break
-			}
-			m.SetMapIndex(mkey, mval)
-		}
-		sch = m
+		return f.decodeMap(rfVal)
+	case reflect.Struct:
+		return f.decodeStruct(rfVal, v)
 	}
-
-	if errs != nil {
-		if f.Name != "" {
-			return sch, map[string]any{f.Name: errs}
-		}
-		if slcErr, ok := errs.([]any); ok && len(slcErr) == 1 {
-			return sch, slcErr[0]
-		} else {
-			if mapErrs, ok := errs.(map[string]any); ok && len(mapErrs) == 1 {
-				for _, err := range mapErrs {
-					return sch, err
-				}
-			}
-			return sch, errs
-		}
-	}
-	return sch, nil
-}
-
-func (f *Fielder) CheckSchPtr(r reflect.Value) any {
-	if f.IsPointer && r.Kind() != reflect.Pointer {
-		return r.Addr().Interface()
-	} else if !f.IsPointer && r.Kind() == reflect.Pointer {
-		return r.Elem().Interface()
-	}
-	return r.Interface()
 }
 
 func (f *Fielder) Decode(data any) (any, error) {
@@ -429,10 +419,16 @@ func (f *Fielder) Decode(data any) (any, error) {
 		}
 		return nil, errors.New(fmt.Sprint(err))
 	}
-	if !sch.IsValid() {
-		return nil, errors.New("invalid reflect")
-	}
 	return f.CheckSchPtr(sch), nil
+}
+
+func (f *Fielder) CheckSchPtr(r reflect.Value) any {
+	if f.IsPointer && r.Kind() != reflect.Pointer {
+		return r.Addr().Interface()
+	} else if !f.IsPointer && r.Kind() == reflect.Pointer {
+		return r.Elem().Interface()
+	}
+	return r.Interface()
 }
 
 func (f *Fielder) New() reflect.Value {

@@ -89,22 +89,37 @@ $ go run .
 
 ### Struct Tags Allowed
 
-- ### strict
+- ### escape
 
-  - for: Slices
-  - default: true
+  - for: String
+  - default: false
+
+- ### nullable
+
+  - for: All
+  - default: false
 
 - ### required
 
   - for: All
-  - default: true
+  - default: false
 
 - ### name
 
   - for: All
   - default: Struct field name
 
-- ### escape
+- ### heritage
 
-  - for: String
+  - for: struct field
+  - default: false
+
+- ### recursive
+
+  - for: structs & slices
+  - default: true
+
+- ### SkipOnErr
+
+  - for: All
   - default: false

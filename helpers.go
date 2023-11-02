@@ -39,13 +39,21 @@ func convert(v *reflect.Value, t reflect.Type, stringEscape bool) bool {
 				return false
 			}
 			*v = reflect.ValueOf(i).Convert(t)
-		case reflect.Int, reflect.Int64:
+		case
+			reflect.Uint, reflect.Uint64, reflect.Uint32, reflect.Uint16,
+			reflect.Int, reflect.Int64, reflect.Int32, reflect.Int16:
 			*v = v.Convert(t)
 		case reflect.Float32, reflect.Float64:
 			*v = v.Convert(t)
+		default:
+			return false
 		}
-	case reflect.Int, reflect.Int64:
+	case
+		reflect.Uint, reflect.Uint64, reflect.Uint32, reflect.Uint16,
+		reflect.Int, reflect.Int64, reflect.Int32, reflect.Int16:
 		switch v.Kind() {
+		case t.Kind():
+			return true
 		case reflect.String:
 			val, err := strconv.ParseFloat(v.Interface().(string), 64)
 			if err != nil {
@@ -53,6 +61,9 @@ func convert(v *reflect.Value, t reflect.Type, stringEscape bool) bool {
 			}
 			*v = reflect.ValueOf(val).Convert(t)
 		case reflect.Float32, reflect.Float64:
+			*v = v.Convert(t)
+		case reflect.Uint, reflect.Uint64, reflect.Uint32, reflect.Uint16,
+			reflect.Int, reflect.Int64, reflect.Int32, reflect.Int16:
 			*v = v.Convert(t)
 		default:
 			return false
@@ -70,19 +81,18 @@ func convert(v *reflect.Value, t reflect.Type, stringEscape bool) bool {
 		} else {
 			return false
 		}
-
 	case reflect.String:
 		nv := fmt.Sprint(v.Interface())
 		if stringEscape {
 			nv = htmlReplacer.Replace(nv)
 		}
 		*v = reflect.ValueOf(nv)
-
 	}
 	return true
 }
 
 func SetReflectValue(r reflect.Value, v reflect.Value, escape bool) bool {
+	defer try()
 	if v.IsValid() {
 		c := convert(&v, r.Type(), escape)
 		if c {
@@ -100,18 +110,16 @@ func SetReflectValue(r reflect.Value, v reflect.Value, escape bool) bool {
 
 func parseTags(tag string) map[string]string {
 	kvTags := map[string]string{}
-
 	pairs := strings.Split(tag, ",")
 	for _, pair := range pairs {
 		pair = strings.TrimSpace(pair)
 		if pair == "" {
 			continue
 		}
-
 		kv := strings.Split(pair, "=")
 		key := strings.ToLower(kv[0])
 		if len(kv) == 1 {
-			kvTags[key] = ""
+			kvTags[key] = "true"
 		} else {
 			kvTags[key] = kv[1]
 		}
@@ -120,12 +128,12 @@ func parseTags(tag string) map[string]string {
 }
 
 func RetInvalidType(f *Fielder) error {
-	s := fmt.Sprintf(`{"field":"%s", "type": "%s","message": "invalid type","required": %v}`, f.Name, f.Type.String(), f.Required)
+	s := fmt.Sprintf(`{"field":"%s", "type": "%s","message": "invalid type","required": "%v"}`, f.Name, f.Type.String(), f.Required)
 	return errors.New(s)
 }
 
 func RetMissing(f *Fielder) error {
-	s := fmt.Sprintf(`{"field":"%s", "type": "%s","message": "missing","required": %v}`, f.Name, f.Type.String(), f.Required)
+	s := fmt.Sprintf(`{"field":"%s", "type": "%s","message": "missing","required": "%v"}`, f.Name, f.Type.String(), f.Required)
 	return errors.New(s)
 }
 
