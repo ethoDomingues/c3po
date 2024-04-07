@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 )
@@ -25,7 +26,7 @@ func encode(v any) (any, error) {
 			rv = rv2
 		}
 	}
-
+	fmt.Scanln()
 	rt := rv.Type()
 	switch rv.Kind() {
 	default:
@@ -126,7 +127,13 @@ func encodeMap(v any) (any, error) {
 	return data, nil
 }
 
-// Transforms a complex struct into a map or a []map
+/*
+Transforms a complex struct into a map or a []map
+
+	c3po.Encode(struct{Name:"Jão"}) => map[string]any{"Name":"jão"}
+	c3po.Encode(struct{Name:"Jão", Age:99}) => map[string]any{"Name":"jão", "Age":99}
+	c3po.Encode([]struct{Name:"Jão", Age:99}) => []map[string]any{"Name":"jão", "Age":99}
+*/
 func Encode(v ...any) (any, error) {
 	if v == nil {
 		panic("'v' is nil")
@@ -150,14 +157,32 @@ func Encode(v ...any) (any, error) {
 	return vals, _e
 }
 
-func EncodeToJSON(v ...any) (string, error) {
+/*
+EncodeToJSON is similar to Encode, but return a []byte{}
+
+	c3po.EncodeToJSON(struct{Name:"Jão", Age:99}) => []byte{"{'Name':'jão', 'Age':99}"}
+*/
+func EncodeToJSON(v ...any) ([]byte, error) {
 	d, err := Encode(v...)
-	if err != nil {
-		return "", err
+	if err == nil {
+		var b []byte
+		b, err = json.Marshal(d)
+		if err == nil {
+			return b, nil
+		}
 	}
-	b, err := json.Marshal(d)
-	if err != nil {
-		return "", err
+	return []byte{}, err
+}
+
+/*
+EncodeToString is similar to EncodeToJSON, but return a []byte{}
+
+	c3po.EncodeToString(struct{Name:"Jão", Age:99}) => "{'Name':'jão', 'Age':99}"
+*/
+func EncodeToString(v ...any) (string, error) {
+	d, err := EncodeToJSON(v...)
+	if err == nil {
+		return string(d), nil
 	}
-	return string(b), nil
+	return "", err
 }

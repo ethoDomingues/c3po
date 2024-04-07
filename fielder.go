@@ -45,19 +45,19 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 		f.Name = f.RealName
 	}
 
-	v, ok := tags["escape"]
+	v, ok := tags["escape"] // default true
 	f.Escape = (ok && (strings.ToLower(v) == "true"))
 
-	v, ok = tags["required"]
+	v, ok = tags["required"] // default false
 	f.Required = ok && (strings.ToLower(v) == "true")
 
-	v, ok = tags["recursive"]
+	v, ok = tags["recursive"] // default false
 	f.Recursive = !ok || strings.ToLower(v) != "false"
 
-	v, ok = tags["nullable"]
-	f.Nullable = ok && strings.ToLower(v) == "true"
+	v, ok = tags["nullable"] // default false
+	f.Nullable = ok && strings.ToLower(v) == "true" && !f.Required
 
-	v, ok = tags["skiponerr"] // skip field on err
+	v, ok = tags["skiponerr"] // skip field on err - default false
 	f.SkipOnErr = ok && (strings.ToLower(v) == "true") && !f.Required
 
 	if rv.Kind() == reflect.Pointer {
@@ -143,6 +143,24 @@ func ParseSchemaWithTag(tagKey string, schema any) *Fielder {
 	return parseSchema(schema, tagKey, tags)
 }
 
+/*
+usage:
+
+	c3po.ParseSchema(struct{}) => struct{}
+	c3po.ParseSchema(&struct{}) => *struct{}
+	c3po.ParseSchema(&struct{Field:Value}) => *struct{Field: value} // with default value
+
+	type Schema struct{
+		Field `c3po:"-"` // omit this field
+		Field `c3po:"realName"` // string: real name field
+		Field `c3po:"name"` 	// string: name of validation	(default realName)
+		Field `c3po:"escape"`	// bool: escape html value		(default false)
+		Field `c3po:"required"` // bool:		...			 	(default false)
+		Field `c3po:"nullable"` // bool: if true, allow nil value (default false)
+		Field `c3po:"recursive"`// bool: deep validation	  	(default true)
+		Field `c3po:"skiponerr"`// bool: omit on valid. error 	(default false)
+	}
+*/
 func ParseSchema(schema any) *Fielder {
 	return ParseSchemaWithTag("c3po", schema)
 }
@@ -275,7 +293,7 @@ func (f *Fielder) decodeMap(rv reflect.Value) (sch reflect.Value, err any) {
 			return
 		}
 		mval, _err := f.MapValueType.decodeSchema(mindex.Interface())
-		if err != nil {
+		if _err != nil {
 			err = _err
 			return
 		}
@@ -285,7 +303,7 @@ func (f *Fielder) decodeMap(rv reflect.Value) (sch reflect.Value, err any) {
 	return
 }
 
-func (f *Fielder) decodeStruct(rv reflect.Value, v any) (sch reflect.Value, err any) {
+func (f *Fielder) decodeStruct(v any) (sch reflect.Value, err any) {
 	errs := []any{}
 	data, ok := v.(map[string]any)
 	if !ok {
@@ -404,7 +422,7 @@ func (f *Fielder) decodeSchema(v any) (reflect.Value, any) {
 	case reflect.Map:
 		return f.decodeMap(rfVal)
 	case reflect.Struct:
-		return f.decodeStruct(rfVal, v)
+		return f.decodeStruct(rfVal)
 	}
 }
 
