@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 )
@@ -26,7 +25,6 @@ func encode(v any) (any, error) {
 			rv = rv2
 		}
 	}
-	fmt.Scanln()
 	rt := rv.Type()
 	switch rv.Kind() {
 	default:
@@ -138,15 +136,18 @@ func Encode(v ...any) (any, error) {
 	if v == nil {
 		panic("'v' is nil")
 	}
+
 	vals := []any{}
 	errs := bytes.NewBufferString("")
 	for _, val := range v {
+
 		if _v, err := encode(val); err == nil {
 			vals = append(vals, _v)
 		} else {
 			errs.WriteString(err.Error())
 		}
 	}
+
 	var _e error
 	if errs.Len() > 0 {
 		_e = errors.New(errs.String())
@@ -162,7 +163,7 @@ EncodeToJSON is similar to Encode, but return a []byte{}
 
 	c3po.EncodeToJSON(struct{Name:"Jão", Age:99}) => []byte{"{'Name':'jão', 'Age':99}"}
 */
-func EncodeToJSON(v ...any) ([]byte, error) {
+func EncodeToBytes(v ...any) ([]byte, error) {
 	d, err := Encode(v...)
 	if err == nil {
 		var b []byte
@@ -174,15 +175,35 @@ func EncodeToJSON(v ...any) ([]byte, error) {
 	return []byte{}, err
 }
 
+func EncodeToBytesWithIndent(indent string, v ...any) ([]byte, error) {
+	d, err := Encode(v...)
+	if err == nil {
+		var b []byte
+		b, err = json.MarshalIndent(d, "", indent)
+		if err == nil {
+			return b, nil
+		}
+	}
+	return []byte{}, err
+}
+
 /*
-EncodeToString is similar to EncodeToJSON, but return a []byte{}
+EncodeToString return a string representation if ok, else empty string
 
 	c3po.EncodeToString(struct{Name:"Jão", Age:99}) => "{'Name':'jão', 'Age':99}"
 */
-func EncodeToString(v ...any) (string, error) {
-	d, err := EncodeToJSON(v...)
+func EncodeToString(v ...any) string {
+	d, err := EncodeToBytes(v...)
 	if err == nil {
-		return string(d), nil
+		return string(d)
 	}
-	return "", err
+	return ""
+}
+
+func EncodeToStringIndent(indent string, v ...any) string {
+	d, err := EncodeToBytesWithIndent(indent, v...)
+	if err == nil {
+		return string(d)
+	}
+	return ""
 }

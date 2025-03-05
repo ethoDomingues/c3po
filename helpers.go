@@ -127,13 +127,38 @@ func parseTags(tag string) map[string]string {
 	return kvTags
 }
 
+func RetMissing(f *Fielder) error {
+	s := fmt.Sprintf(`{"field":"%s", "type": "%s","message": "missing","required": "%v"}`, f.Name, f.Type.String(), f.Required)
+	return errors.New(s)
+}
+
+func GetReflectElem(r reflect.Value) reflect.Value {
+	for c := 0; c < 10; c++ {
+		if r.Kind() != reflect.Ptr {
+			break
+		}
+		r = r.Elem()
+	}
+	return r
+}
+
+func GetReflectTypeElem(t reflect.Type) reflect.Type {
+	for c := 0; c < 10; c++ {
+		if t.Kind() != reflect.Ptr {
+			break
+		}
+		t = t.Elem()
+	}
+	return t
+}
+
 func RetInvalidType(f *Fielder) error {
 	s := fmt.Sprintf(`{"field":"%s", "type": "%s","message": "invalid type","required": "%v"}`, f.Name, f.Type.String(), f.Required)
 	return errors.New(s)
 }
 
-func RetMissing(f *Fielder) error {
-	s := fmt.Sprintf(`{"field":"%s", "type": "%s","message": "missing","required": "%v"}`, f.Name, f.Type.String(), f.Required)
+func RetInvalidValue(f *Fielder) error {
+	s := fmt.Sprintf(`{"field":"%s", "type": "%s","message": "invalid value","required": "%v"}`, f.Name, f.Type.String(), f.Required)
 	return errors.New(s)
 }
 

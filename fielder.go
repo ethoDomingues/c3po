@@ -57,6 +57,9 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 	v, ok = tags["nullable"] // default false
 	f.Nullable = ok && strings.ToLower(v) == "true" && !f.Required
 
+	v, ok = tags["nonzero"] // default false
+	f.NonZero = ok && (strings.ToLower(v) == "true")
+
 	v, ok = tags["skiponerr"] // skip field on err - default false
 	f.SkipOnErr = ok && (strings.ToLower(v) == "true") && !f.Required
 
@@ -108,7 +111,8 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 			}
 		}
 	case reflect.Slice, reflect.Array:
-		f.Type = reflect.Slice
+		f.Recursive = true
+		f.Type = rt.Kind()
 		f.IsSlice = true
 		sliceObjet := reflect.New(rv.Type().Elem()).Elem()
 		f.SliceType = parseSchema(sliceObjet.Interface(), tagKey, map[string]string{"realName": ""})
@@ -137,8 +141,9 @@ func parseSchema(schema any, tagKey string, tags map[string]string) *Fielder {
 }
 
 func ParseSchemaWithTag(tagKey string, schema any) *Fielder {
-	tags := map[string]string{
-		"realName": reflect.TypeOf(schema).Name(),
+	tags := map[string]string{}
+	if rn := reflect.TypeOf(schema).Name(); rn != "" {
+		tags["realName"] = rn
 	}
 	return parseSchema(schema, tagKey, tags)
 }
@@ -185,9 +190,11 @@ type Fielder struct {
 	Escape    bool // default: false
 	Required  bool // default: false
 	Nullable  bool // default: false
+	NonZero   bool // default: false -> only Integers
 	Heritage  bool // default: false
 	Recursive bool // default: true
 	SkipOnErr bool // default: false
+	OmitEmpty bool // default: false
 
 	IsMAP,
 	IsSlice,
@@ -218,11 +225,11 @@ func (f *Fielder) decodePrimitive(rv reflect.Value) (sch reflect.Value, err any)
 }
 
 func (f *Fielder) decodeSlice(rv reflect.Value) (sch reflect.Value, err any) {
-	sliceOf := reflect.TypeOf(f.SliceType.Schema)
+	sliceOf := reflect.TypeOf(f.Schema)
 	lenSlice := rv.Len()
 	capSlice := rv.Cap()
 
-	sch = reflect.MakeSlice(reflect.SliceOf(sliceOf), lenSlice, capSlice)
+	sch = reflect.MakeSlice(sliceOf, lenSlice, capSlice)
 
 	errs := []any{}
 	for i := 0; i < lenSlice; i++ {
@@ -323,6 +330,7 @@ func (f *Fielder) decodeStruct(v any) (sch reflect.Value, err any) {
 	}
 
 	sch = f.New().Elem()
+
 	for i := 0; i < sch.NumField(); i++ {
 		schF := sch.Field(i)
 		if !schF.CanInterface() {
@@ -392,6 +400,9 @@ func (f *Fielder) decodeStruct(v any) (sch reflect.Value, err any) {
 }
 
 func (f *Fielder) decodeSchema(v any) (reflect.Value, any) {
+	if v == "" && f.Type != reflect.String {
+		v = nil
+	}
 	if v == nil {
 		if f.Default != nil {
 			return f.decodeSchema(f.Default)
@@ -413,16 +424,26 @@ func (f *Fielder) decodeSchema(v any) (reflect.Value, any) {
 			return f.New(), nil
 		}
 	}
+
 	var rfVal = reflectOf(v)
+	if rfVal.CanInt() || rfVal.CanFloat() && rfVal.Interface() == 0 {
+		if f.NonZero {
+			if f.Default.(int) == 0 {
+				return reflect.Value{}, RetInvalidValue(f)
+			}
+			v = f.Default
+			rfVal = reflectOf(v)
+		}
+	}
 	switch f.Type {
 	default:
 		return f.decodePrimitive(rfVal)
-	case reflect.Array, reflect.Slice:
-		return f.decodeSlice(rfVal)
 	case reflect.Map:
 		return f.decodeMap(rfVal)
+	case reflect.Array, reflect.Slice:
+		return f.decodeSlice(rfVal)
 	case reflect.Struct:
-		return f.decodeStruct(rfVal)
+		return f.decodeStruct(v)
 	}
 }
 
@@ -437,11 +458,13 @@ func (f *Fielder) Decode(data any) (any, error) {
 		}
 		return nil, errors.New(fmt.Sprint(err))
 	}
+
 	return f.CheckSchPtr(sch), nil
 }
 
 func (f *Fielder) CheckSchPtr(r reflect.Value) any {
-	if f.IsPointer && r.Kind() != reflect.Pointer {
+
+	if f.IsPointer && (r.CanAddr() && r.Kind() != reflect.Pointer) {
 		return r.Addr().Interface()
 	} else if !f.IsPointer && r.Kind() == reflect.Pointer {
 		return r.Elem().Interface()
@@ -461,22 +484,32 @@ func (f *Fielder) New() reflect.Value {
 	return v
 }
 
-func GetReflectElem(r reflect.Value) reflect.Value {
-	for c := 0; c < 10; c++ {
-		if r.Kind() != reflect.Ptr {
-			break
-		}
-		r = r.Elem()
+func (f *Fielder) ToMap() map[string]any {
+	fildMap := map[string]any{}
+	if n, ok := f.Tags["name"]; ok {
+		fildMap["name"] = n
+	} else {
+		fildMap["name"] = f.Name
 	}
-	return r
+	if in, ok := f.Tags["in"]; ok {
+		fildMap["in"] = in
+	}
+	if st, ok := f.Tags["strType"]; ok {
+		fildMap["type"] = st
+	} else {
+		fildMap["type"] = f.Type.String()
+	}
+
+	if len(f.Children) > 0 {
+		childsMap := map[string]any{}
+		for cn, cv := range f.Children {
+			childsMap[cn] = cv.ToMap()
+		}
+		fildMap["schema"] = childsMap
+	}
+	return fildMap
 }
 
-func GetReflectTypeElem(t reflect.Type) reflect.Type {
-	for c := 0; c < 10; c++ {
-		if t.Kind() != reflect.Ptr {
-			break
-		}
-		t = t.Elem()
-	}
-	return t
+func (f *Fielder) String() string {
+	return EncodeToStringIndent("  ", f.ToMap())
 }
